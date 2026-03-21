@@ -1,6 +1,6 @@
 import 'dart:convert';
 
-import 'package:flncrawly/src/response/response.dart';
+import 'package:flncrawly/flncrawly.dart';
 
 /// A response containing decoded textual content.
 class TextResponse extends Response {
@@ -16,4 +16,31 @@ class TextResponse extends Response {
 
   /// The response body decoded as a UTF-8 string.
   String get text => utf8.decode(body);
+
+  HtmlResponse get html => HtmlResponse(
+    url: url,
+    status: status,
+    headers: headers,
+    body: body,
+    request: request,
+    meta: meta,
+  );
+
+  XmlResponse get xml => XmlResponse(
+    url: url,
+    status: status,
+    headers: headers,
+    body: body,
+    request: request,
+    meta: meta,
+  );
+
+  JsonResponse get json => JsonResponse(
+    url: url,
+    status: status,
+    headers: headers,
+    body: body,
+    request: request,
+    meta: meta,
+  );
 }

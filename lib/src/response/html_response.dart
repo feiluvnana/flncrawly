@@ -93,10 +93,10 @@ class HtmlSelector {
   String attr(String name) => (_element.attributes[name] ?? '').trim();
 
   /// Get the inner HTML content of the current element.
-  String innerHtml() => _element.innerHtml;
+  String innner() => _element.innerHtml;
 
   /// Get the outer HTML content of the current element.
-  String outerHtml() => _element.outerHtml;
+  String outer() => _element.outerHtml;
 
   /// Get the tag name of the current element.
   String tag() => _element.localName ?? '';
@@ -125,8 +125,8 @@ final class HtmlSelectionList {
   List<String> attr(String name) => map((element) => element.attr(name));
 
   /// Extract the inner HTML content of all selected elements.
-  List<String> innerHtml() => map((element) => element.innerHtml());
+  List<String> inner() => map((element) => element.innner());
 
   /// Extract the outer HTML content of all selected elements.
-  List<String> outerHtml() => map((element) => element.outerHtml());
+  List<String> outer() => map((element) => element.outer());
 }
