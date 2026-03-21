@@ -1,17 +1,25 @@
 import 'dart:async';
 import 'dart:math';
 
+import 'package:flncrawly/src/core/engine.dart';
 import 'package:flncrawly/src/request/request.dart';
 
 /// Orchestrates the flow of requests between the scheduler and the engine.
 abstract class Dispatcher<Req extends Request> {
-  const Dispatcher();
+  /// The engine instance running this dispatcher.
+  late final Engine engine;
+
+  /// A stream of internal dispatcher events for monitoring.
+  Stream<DispatcherEvent<Req>> get events;
 
   /// A stream of requests ready to be downloaded.
-  Stream<Req> get stream;
+  Stream<Req> get requests;
 
   /// Adds a new request to the crawling queue.
   void push(Req req);
+
+  /// Alias for [push].
+  void enqueue(Req req) => push(req);
 
   /// Schedules a request for retry with an appropriate backoff.
   void retry(Req req);
@@ -25,78 +33,73 @@ abstract class Dispatcher<Req extends Request> {
 
 /// The default [Dispatcher] implementation with concurrency control and prioritization.
 class DefaultDispatcher<Req extends Request> extends Dispatcher<Req> {
-  /// Maximum number of retries per request.
   final int maxRetries;
-
-  /// Maximum number of requests to process in parallel.
   final int maxConcurrent;
 
-  int _activeCount = 0;
-  int _pendingRetries = 0;
-  final Random _random = Random();
-  final Set<String> _seen = <String>{};
-  final List<Req> _queue = [];
-  final StreamController<Req> _controller = StreamController<Req>();
+  int _retryingCount = 0;
+  int _concurrentCount = 0;
 
-  /// Creates a [DefaultDispatcher] with configurable [maxRetries] and [maxConcurrent] limits.
+  final Set<String> _seen = {};
+  final List<Req> _queue = [];
+
+  final StreamController<Req> _controller = StreamController<Req>();
+  final StreamController<DispatcherEvent<Req>> _eventController =
+      StreamController.broadcast();
+
   DefaultDispatcher({this.maxRetries = 3, this.maxConcurrent = 10});
 
   @override
-  Stream<Req> get stream => _controller.stream;
+  Stream<Req> get requests => _controller.stream;
+
+  @override
+  Stream<DispatcherEvent<Req>> get events => _eventController.stream;
 
   @override
   void push(Req req) {
     if (_controller.isClosed) return;
-    if (!req.dontFilter) {
-      if (_seen.contains(req.fingerprint)) return;
-      _seen.add(req.fingerprint);
-    }
+    if (!req.dontFilter && !_seen.add(req.fingerprint)) return;
+    _eventController.add(DispatcherEvent(DispatcherEventType.enqueued, req));
     _enqueue(req);
   }
 
   @override
   void retry(Req req) {
     if (_controller.isClosed || req.retries >= maxRetries) return;
-    
-    final backoff = pow(2, req.retries).toInt();
-    final baseMs = (2000 * backoff) + _random.nextInt((2000 * backoff * 0.2).toInt() + 1);
-    
-    _pendingRetries++;
-    Future.delayed(Duration(milliseconds: baseMs), () {
-      _pendingRetries--;
+    _eventController.add(DispatcherEvent(DispatcherEventType.retrying, req));
+    _retryingCount++;
+    final delay = Duration(seconds: pow(2, req.retries).toInt());
+    Future.delayed(delay, () {
+      _retryingCount--;
       _enqueue(req.nextRetry() as Req);
     });
   }
 
   void _enqueue(Req req) {
-    if (_controller.isClosed) return;
-    
-    // Insert into sorted queue (highest priority first)
-    int index = _queue.indexWhere((r) => req.priority > r.priority);
-    if (index == -1) {
-      _queue.add(req);
-    } else {
-      _queue.insert(index, req);
-    }
-    
-    _dispatchNext();
+    _queue.add(req);
+    _queue.sort((a, b) => b.priority.compareTo(a.priority));
+    _dispatch();
   }
 
-  void _dispatchNext() {
-    while (!_controller.isClosed && _queue.isNotEmpty && _activeCount < maxConcurrent) {
+  void _dispatch() {
+    if (_controller.isClosed) return;
+    while (_queue.isNotEmpty && _concurrentCount < maxConcurrent) {
       final req = _queue.removeAt(0);
-      _activeCount++;
+      _concurrentCount++;
+      _eventController.add(
+        DispatcherEvent(DispatcherEventType.dispatched, req),
+      );
       _controller.add(req);
     }
   }
 
   @override
   void complete(Req req) {
-    _activeCount--;
-    if (_queue.isEmpty && _activeCount == 0 && _pendingRetries == 0 && !_controller.isClosed) {
+    _concurrentCount--;
+    _eventController.add(DispatcherEvent(DispatcherEventType.completed, req));
+    if (_queue.isEmpty && _concurrentCount == 0 && _retryingCount == 0) {
       close();
     } else {
-      _dispatchNext();
+      _dispatch();
     }
   }
 
@@ -104,6 +107,22 @@ class DefaultDispatcher<Req extends Request> extends Dispatcher<Req> {
   void close() {
     if (!_controller.isClosed) {
       _controller.close();
+      _eventController.close();
     }
   }
+}
+
+/// The types of events emitted by a [Dispatcher].
+enum DispatcherEventType { enqueued, dispatched, retrying, completed }
+
+/// An event tracked by the [Dispatcher].
+class DispatcherEvent<Req extends Request> {
+  final DispatcherEventType type;
+  final Req request;
+  final DateTime timestamp;
+
+  DispatcherEvent(this.type, this.request) : timestamp = DateTime.now();
+
+  @override
+  String toString() => '${type.name.toUpperCase()}: ${request.url}';
 }

@@ -44,7 +44,7 @@ class Request {
     this.dontFilter = false,
   });
 
-  /// Unique fingerprint for deduplication. 
+  /// Unique fingerprint for deduplication.
   /// Includes [method], [url], and a hash of the [body] if present.
   String get fingerprint {
     if (body == null || body!.isEmpty) return '$method:$url';

@@ -23,13 +23,18 @@ class JsonResponse extends TextResponse {
   JsonSelector? $path(String selector) => this.selector.$path(selector);
 
   /// Find all values matching the given JSONPath [selector].
-  JsonSelectionList $pathall(String selector) => this.selector.$pathall(selector);
+  JsonSelectionList $pathall(String selector) =>
+      this.selector.$pathall(selector);
 
   /// Find a single value matching the given JMESPath [selector].
   JsonSelector? $jmes(String selector) => this.selector.$jmes(selector);
 
   /// Find all values matching the given JMESPath [selector].
-  JsonSelectionList $jmesall(String selector) => this.selector.$jmesall(selector);
+  JsonSelectionList $jmesall(String selector) =>
+      this.selector.$jmesall(selector);
+
+  /// Get the raw decoded JSON data.
+  dynamic data() => selector.raw();
 }
 
 /// Helper for querying and extracting data from JSON objects.
@@ -47,7 +52,9 @@ final class JsonSelector {
 
   /// Find all sub-values matching the JSONPath [expr].
   JsonSelectionList $pathall(String expr) {
-    final values = JsonPath(expr).read(_value).map((m) => JsonSelector(m.value)).toList();
+    final values = JsonPath(
+      expr,
+    ).read(_value).map((m) => JsonSelector(m.value)).toList();
     return JsonSelectionList(values);
   }
 
@@ -71,6 +78,9 @@ final class JsonSelector {
 
   /// Get the string representation of the current value, trimmed.
   String text() => _value?.toString().trim() ?? '';
+
+  /// Get the raw underlying value at this node.
+  dynamic raw() => _value;
 }
 
 /// A list of [JsonSelector]s, providing batch extraction methods.
@@ -83,9 +93,15 @@ final class JsonSelectionList {
   /// The number of selected items.
   int get length => _items.length;
 
+  /// The underlying list of selectors.
+  List<JsonSelector> get items => _items;
+
   /// Transform each selected JSON node using [fn].
   List<T> map<T>(T Function(JsonSelector) fn) => _items.map(fn).toList();
 
   /// Extract the string representation of all selected items.
   List<String> text() => map((value) => value.text());
+
+  /// Extract the raw underlying values for all selected items.
+  List<dynamic> raw() => map((value) => value.raw());
 }

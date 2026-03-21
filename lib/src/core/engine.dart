@@ -3,85 +3,124 @@ import 'package:flncrawly/src/core/downloader.dart';
 import 'package:flncrawly/src/core/pipeline.dart';
 import 'package:flncrawly/src/core/processor.dart';
 import 'package:flncrawly/src/request/request.dart';
-import 'package:flncrawly/src/response/text_response.dart';
+import 'package:flncrawly/src/response/response.dart';
 
 /// The core orchestrator that drives the entire crawling process.
-///
-/// [T] is the type of data item being extracted.
-/// [Req] and [Res] allow for customized request and response types.
-class Engine<T, Req extends Request, Res extends TextResponse> {
-  /// The [Dispatcher] responsible for request scheduling.
+class Engine<T, Req extends Request, Res extends Response> {
   final Dispatcher<Req> dispatcher;
-
-  /// The [Downloader] responsible for network communication.
   final Downloader<Req, Res> downloader;
-
-  /// The [Processor] that extracts data and instructions from responses.
-  final Processor<T, Res, Req> processor;
-
-  /// A list of [Pipeline]s for post-processing extracted items.
+  final Processor<T, Req, Res> processor;
   final List<Pipeline<T>> pipelines;
 
-  /// Creates a new [Engine] with the required components.
-  Engine({required this.dispatcher, required this.downloader, required this.processor, required this.pipelines});
+  void Function(String msg) log = print;
+  final Stats stats = Stats();
+
+  Engine({
+    required this.dispatcher,
+    required this.downloader,
+    required this.processor,
+    required this.pipelines,
+  }) {
+    dispatcher.engine = this;
+    downloader.engine = this;
+    processor.engine = this;
+    for (var p in pipelines) {
+      p.engine = this;
+    }
+  }
 
   final List<Future<void>> _active = [];
 
-  /// Starts the crawling process using the provided [seeds] as entry points.
-  ///
-  /// This method returns when the crawl is finished (i.e., when there are no more
-  /// pending requests or when a [Finish] instruction is received).
-  Future<void> start({required List<Req> seeds}) async {
-    print('Starting engine with ${seeds.length} seeds');
+  /// Starts the engine using provided seeds or processor's defaults.
+  Future<void> start({List<Req>? seeds}) async {
+    final startSeeds = seeds ?? processor.seeds;
+    stats.start = DateTime.now();
 
-    final loop = () async {
-      await for (final req in dispatcher.stream) {
-        final task = _run(req);
-        _active.add(task);
-        task.whenComplete(() => _active.remove(task));
-      }
-    }();
+    log('Starting crawl with ${startSeeds.length} seeds');
 
-    seeds.forEach(dispatcher.push);
+    final done = dispatcher.requests.forEach((req) {
+      final task = _run(req);
+      _active.add(task);
+      task.whenComplete(() => _active.remove(task));
+    });
 
-    await loop;
+    for (var seed in startSeeds) {
+      dispatcher.push(seed);
+    }
+
+    await done;
     await Future.wait(_active);
 
-    print('Engine stopped');
+    stats.end = DateTime.now();
+    log('Engine stopped. $stats');
+  }
+
+  /// Programmatically stops the engine by closing the dispatcher.
+  void stop() {
+    log('Stopping engine...');
+    dispatcher.close();
   }
 
   Future<void> _run(Req req) async {
-    try {
-      final res = await downloader.download(req);
+    stats.requests++;
 
-      await for (final output in processor.process(res)) {
-        switch (output) {
+    try {
+      var res = await downloader.download(req);
+      stats.successes++;
+
+      for (final m in processor.middlewares) {
+        res = await m.handle(res);
+      }
+
+      await for (final r in processor.process(res)) {
+        switch (r) {
           case Item<T, Req>(:final item):
-            await _feedPipelines(item);
+            await _feed(item);
           case Follow<T, Req>(:final request):
             dispatcher.push(request);
           case Retry<T, Req>(:final request):
             dispatcher.retry(request);
           case Error<T, Req>(:final error, :final stackTrace):
-            print('Error: $error');
-            if (stackTrace != null) print(stackTrace);
+            stats.failures++;
+            log('Error: $error');
+            if (stackTrace != null) log(stackTrace.toString());
           case Finish<T, Req>():
             dispatcher.close();
         }
       }
     } catch (e, s) {
-      print('Execution error: $e');
-      print(s);
+      stats.failures++;
+      log('Execution error: $e\n$s');
     } finally {
       dispatcher.complete(req);
     }
   }
 
-  Future<void> _feedPipelines(T item) async {
+  Future<void> _feed(T item) async {
+    stats.items++;
     T? current = item;
-    for (final pipeline in pipelines) {
+
+    for (final p in pipelines) {
       if (current == null) break;
-      current = await pipeline.handle(current);
+      current = await p.handle(current);
     }
   }
+}
+
+/// A collector for crawl performance metrics.
+class Stats {
+  int requests = 0;
+  int successes = 0;
+  int failures = 0;
+  int items = 0;
+
+  DateTime? start;
+  DateTime? end;
+
+  Duration? get duration =>
+      (start != null && end != null) ? end!.difference(start!) : null;
+
+  @override
+  String toString() =>
+      'Stats(reqs: $requests, ok: $successes, fail: $failures, items: $items, time: ${duration?.inSeconds}s)';
 }

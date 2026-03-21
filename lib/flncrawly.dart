@@ -7,5 +7,7 @@ export 'src/core/processor.dart';
 export 'src/request/request.dart';
 export 'src/response/html_response.dart';
 export 'src/response/json_response.dart';
+export 'src/response/xml_response.dart';
 export 'src/response/response.dart';
 export 'src/response/text_response.dart';
+export 'src/request/user_agents.dart';

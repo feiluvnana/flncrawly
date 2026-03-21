@@ -1,13 +1,16 @@
 # 🕸️ flncrawly
 
-A robust, minimalist, and developer-friendly web crawling framework for Dart. Built with a modular architecture that separates request scheduling, content downloading, data extraction, and post-processing.
+A robust, fluent, and **Scrapy-inspired** web crawling framework for Dart. Built for developers who love concise naming, type safety, and powerful extraction tools.
 
 ## 🚀 Key Features
 
-*   **Modular Architecture**: Easily swap out Schedulers, Downloaders, or Pipelines.
-*   **Built-in Concurrency**: Managed by the Engine's main loop with configurable delays.
-*   **Powerful Extraction**: Seamlessly integrate CSS and XPath selectors via `html` and `xpath_selector_html_parser`.
-*   **Type-Safe**: Designed with Dart generics to ensure your data items maintain their types from extraction to storage.
+*   **Scrapy-Inspired API**: Familiar concepts like Processors, Dispatchers, and Result yielding.
+*   **Fluent & Concise**: A developer-friendly DSL for configuring and running crawls.
+*   **Powerful Selectors**: Built-in support for CSS and XPath selectors across HTML, XML, and JSON.
+*   **Automatic URL Resolution**: Use `absUrl()` on any selector node to resolve links against the response URL.
+*   **Smart Stats**: Built-in tracking for requests, successes, failures, and item counts.
+*   **User-Agent Presets**: Easily rotate or set common browser User-Agents.
+*   **Modular Architecture**: Easily swap or extend the Dispatcher, Downloader, or Pipelines.
 
 ## 📦 Installation
 
@@ -15,13 +18,12 @@ Add `flncrawly` to your `pubspec.yaml`:
 
 ```yaml
 dependencies:
-  flncrawly:
-    path: ./path/to/flncrawly
+  flncrawly: ^1.0.0
 ```
 
 ## 🛠️ Usage Example
 
-Creating a crawler involves defining a `Processor` to extract data and a `Pipeline` to handle that data.
+Define your `Processor` and run it with the fluent `Crawly` interface.
 
 ```dart
 import 'package:flncrawly/flncrawly.dart';
@@ -29,76 +31,95 @@ import 'package:flncrawly/flncrawly.dart';
 // 1. Define your data model
 class Book {
   final String title;
-  Book(this.title);
+  final String price;
+  final String url;
+  Book(this.title, this.price, this.url);
   @override
-  String toString() => 'Book: $title';
+  String toString() => '$title ($price) -> $url';
 }
 
-// 2. Define how to extract data
-class BookProcessor extends Processor<Book> {
+// 2. Define your Processor
+class BookProcessor extends Processor<Book, HtmlResponse, Request> {
+  // Define entry points
   @override
-  Stream<dynamic> process(Response res) async* {
-    if (res is OkResponse) {
-      // Use CSS selectors to find elements
-      final bookNodes = res.css().getall('.product_pod h3 a');
-      
-      for (final node in bookNodes.map((e) => e)) {
-        yield Book(node.attributes['title'] ?? node.text);
-      }
+  List<Request> get seeds => [
+        Request(
+          url: Uri.parse('http://books.toscrape.com/'),
+          headers: {'User-Agent': UserAgents.random()},
+        ),
+      ];
 
-      // Follow pagination
-      final nextUrl = res.css().get('li.next a')?.attr('href');
-      if (nextUrl != null) {
-        yield Request(url: res.urljoin(nextUrl));
-      }
+  @override
+  Stream<Result<Book, Request>> process(HtmlResponse res) async* {
+    final bookNodes = res.$all('.product_pod');
+    
+    for (final node in bookNodes.map((e) => e)) {
+      yield Result.item(Book(
+        node.$('h3 a')?.attr('title') ?? '',
+        node.$('.price_color')?.text() ?? '',
+        node.$('h3 a')?.absUrl('href') ?? '', // Resolves relative URL
+      ));
+    }
+
+    // Easy link following
+    final nextPath = res.$('.next a')?.attr('href');
+    if (nextPath != null) {
+      yield Result.follow(res.follow(nextPath));
     }
   }
 }
 
-// 3. Define how to handle extracted data
-class MyPipeline extends Pipeline<Book> {
-  @override
-  Future<void> handle(Book data) async {
-    print('Saved book: ${data.title}');
-  }
-}
-
 void main() async {
-  // 4. Initialize and start the engine
-  final crawler = Crawly<Book>()
-    .processor(BookProcessor())
-    .use(MyPipeline())
-    .build();
-
-  await crawler.start(seeds: [
-    Request(url: Uri.parse('http://books.toscrape.com/')),
-  ]);
+  // 3. Run the crawl with the fluent API
+  await Crawly<Book, Request, HtmlResponse>()
+      .run(BookProcessor());
+  
+  // The engine automatically logs stats at the end:
+  // Engine stopped. Stats(reqs: 5, ok: 5, fail: 0, items: 100, time: 12s)
 }
 ```
 
 ## 🧩 Core Concepts
 
-### Engine
-The orchestrator. It pulls requests from the **Scheduler**, fetches them via the **Downloader**, hands them to the **Processor**, and broadcasts results to **Pipelines**.
+### Processor
+The core logic of your crawler. It defines **where** to start (`seeds`) and **how** to extract data (`process`).
 
-### Request & Response
-*   **Request**: A URL combined with a priority level.
-*   **Response**: Can be `OkResponse` (with body and selectors) or `FailResponse` (with error and stack trace).
+### Result (Yielding)
+Processors return a `Stream<Result>`, which can yield:
+*   `Result.item(data)`: Emits an extracted item to the pipelines.
+*   `Result.follow(request)`: Schedules a new request.
+*   `Result.retry(request)`: Retries a failed request.
+*   `Result.error(e)`: Reports an error to the engine.
 
-### Selectors
-On an `OkResponse`, you can use:
-*   `res.css()`: Returns a `CssSelector` for standard CSS queries.
-*   `res.xpath()`: Returns an `XPathSelector` for powerful XPath queries.
+### Selectors (Extraction)
+*   **HTML**: `res.$('.selector')`, `res.$x('//expression')`
+*   **XML**: `res.$x('//expression')`
+*   **JSON**: `res.$j('$.path')` (JSONPath) or `res.$m('path.to.value')` (JMESPath)
 
-Both return `ElementMapper` (for single elements) or `ElementAllMapper` (for multiple), providing easy access to `.text()` and `.attr('name')`.
+Use `.absUrl('attrName')` on any selector to resolve relative paths into absolute URLs automatically.
 
-### Scheduler
-Manages the crawl queue. The default `PriorityBasedScheduler` handles:
-*   **Prioritization**: Processes higher priority requests first.
-*   **Duplicate Removal**: Ensures each URL is visited only once.
+### Monitoring & Logging
+The `Engine` automatically tracks statistics and provides a customizable logger:
 
-### Downloader
-The networking layer. Defaults to `HttpDownloader` using the standard `http` package.
+```dart
+final engine = Crawly<MyItem>()
+    .build();
+
+engine.log = (msg) => myCustomLogger.info(msg);
+print(engine.stats.items); // Access stats programmatically
+```
+
+## ⚙️ Advanced Configuration
+
+`Crawly` allows you to customize every aspect:
+
+```dart
+final crawler = Crawly<MyItem>()
+    .dispatcher(DefaultDispatcher(maxConcurrent: 5, maxRetries: 3))
+    .downloader(MyProxyDownloader())
+    .use(SaveToDatabasePipeline())
+    .build();
+```
 
 ---
 

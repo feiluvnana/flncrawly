@@ -32,9 +32,21 @@ abstract class Response {
     required this.meta,
   });
 
+  /// Returns true if the status code indicates success (200-299).
+  bool isSuccess() => status >= 200 && status < 300;
+
+  /// Returns true if the status code indicates a redirection (300-399).
+  bool isRedirect() => status >= 300 && status < 400;
+
+  /// Returns true if the status code indicates a client or server error (>= 400).
+  bool isError() => status >= 400;
+
+  /// Joins the given [path] with the current response URL.
+  Uri urljoin(String path) => url.resolve(path);
+
   /// Helper to create a new [Request] following a relative or absolute URL.
   /// Resolves the given [url] against the current response's [url].
-  Request follow(String url, {Map<String, dynamic>? meta}) {
-    return Request(url: this.url.resolve(url), meta: meta ?? this.meta);
+  Request follow(String path, {Map<String, dynamic>? meta}) {
+    return request.copyWith(url: urljoin(path), meta: meta ?? this.meta);
   }
 }
